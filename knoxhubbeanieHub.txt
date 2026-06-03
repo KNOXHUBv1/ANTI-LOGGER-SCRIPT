@@ -1,0 +1,1286 @@
+local Ascended=loadstring(game:HttpGet("https://raw.githubusercontent.com/knoxexploits/Ui-Library/refs/heads/main/BlackAscendedUI.lua"))()
+local RS=game:GetService("RunService")
+local UIS=game:GetService("UserInputService")
+local TS=game:GetService("TweenService")
+local LT=game:GetService("Lighting")
+local PL=game:GetService("Players")
+local TP=game:GetService("TeleportService")
+local HS2=game:GetService("HttpService")
+local lp=PL.LocalPlayer
+local V3=Vector3.new
+local C3=Color3.fromRGB
+
+local function applyGodMode(char)
+	local hum=char:WaitForChild("Humanoid",5)
+	if not hum then return end
+	hum.BreakJointsOnDeath=false
+	hum.HealthChanged:Connect(function(health)
+		if health<=0 then hum.Health=100 end
+	end)
+	hum:SetStateEnabled(Enum.HumanoidStateType.Dead,false)
+	hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown,false)
+	hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,false)
+	hum.StateChanged:Connect(function(_,newState)
+		if newState==Enum.HumanoidStateType.Dead then
+			hum:ChangeState(Enum.HumanoidStateType.Running)
+		end
+	end)
+end
+if lp.Character then task.spawn(applyGodMode,lp.Character) end
+lp.CharacterAdded:Connect(function(char) task.spawn(applyGodMode,char) end)
+
+local speedNoSteal=58
+local speedSteal=27
+local boosterConn=nil
+local function startBooster()
+	if boosterConn then boosterConn:Disconnect();boosterConn=nil end
+	boosterConn=RS.Heartbeat:Connect(function()
+		local char=lp.Character;if not char then return end
+		local hrp=char:FindFirstChild("HumanoidRootPart")
+		local hum=char:FindFirstChildOfClass("Humanoid")
+		if not(hrp and hum)then return end
+		local md=hum.MoveDirection
+		local spd=(hum.WalkSpeed<25)and speedSteal or speedNoSteal
+		if md.Magnitude>0 then
+			hrp.Velocity=Vector3.new(md.X*spd,hrp.Velocity.Y,md.Z*spd)
+		end
+	end)
+end
+local function stopBooster()
+	if boosterConn then boosterConn:Disconnect();boosterConn=nil end
+end
+
+local infJumpConn=nil
+
+local camNoClipEnabled=false
+local camNoClipConn=nil
+local camScrollConn=nil
+local camPitch=math.rad(-20)
+local camYaw=0
+local camDist=12
+
+local function enableCamNoClip()
+	if camNoClipEnabled then return end
+	camNoClipEnabled=true
+	local cam=workspace.CurrentCamera
+
+	local char=lp.Character
+	local hrp=char and char:FindFirstChild("HumanoidRootPart")
+	if hrp then
+		local look=cam.CFrame.Position-hrp.Position
+		camDist=math.clamp(look.Magnitude,3,50)
+		camYaw=math.atan2(-look.X,-look.Z)
+		camPitch=math.atan2(look.Y,math.sqrt(look.X^2+look.Z^2))
+	end
+	cam.CameraType=Enum.CameraType.Scriptable
+	camNoClipConn=RS.RenderStepped:Connect(function()
+		if not camNoClipEnabled then return end
+		local c2=lp.Character
+		local h2=c2 and c2:FindFirstChild("HumanoidRootPart")
+		if not h2 then return end
+		local delta=UIS:GetMouseDelta()
+		camYaw=camYaw-delta.X*0.004
+		camPitch=math.clamp(camPitch-delta.Y*0.004,math.rad(-80),math.rad(80))
+		local offset=V3(
+			math.sin(camYaw)*math.cos(camPitch),
+			math.sin(camPitch),
+			math.cos(camYaw)*math.cos(camPitch)
+		)*camDist
+		local focus=h2.Position+V3(0,1.5,0)
+		cam.CFrame=CFrame.lookAt(focus+offset,focus)
+	end)
+
+	camScrollConn=UIS.InputChanged:Connect(function(inp)
+		if not camNoClipEnabled then return end
+		if inp.UserInputType==Enum.UserInputType.MouseWheel then
+			camDist=math.clamp(camDist-inp.Position.Z*1.5,3,80)
+		end
+	end)
+end
+
+local function disableCamNoClip()
+	if not camNoClipEnabled then return end
+	camNoClipEnabled=false
+	if camNoClipConn then camNoClipConn:Disconnect();camNoClipConn=nil end
+	if camScrollConn then camScrollConn:Disconnect();camScrollConn=nil end
+	workspace.CurrentCamera.CameraType=Enum.CameraType.Custom
+end
+
+local autoSteal=false
+local stealDelay=1.30
+local isStealing=false
+
+local sg=Instance.new("ScreenGui")
+sg.Name="KnoxGrabBar";sg.ResetOnSpawn=false;sg.DisplayOrder=20;sg.Parent=lp:WaitForChild("PlayerGui")
+local barBg=Instance.new("Frame",sg)
+barBg.Size=UDim2.new(0,240,0,8);barBg.Position=UDim2.new(0.5,-120,0,6)
+barBg.BackgroundColor3=C3(30,30,30);barBg.BackgroundTransparency=0.3;barBg.Visible=false
+Instance.new("UICorner",barBg).CornerRadius=UDim.new(0,4)
+local barFill=Instance.new("Frame",barBg)
+barFill.Size=UDim2.new(0,0,1,0);barFill.BackgroundColor3=C3(255,255,255)
+Instance.new("UICorner",barFill).CornerRadius=UDim.new(0,4)
+
+local grabStatusLbl=Instance.new("TextLabel",sg)
+grabStatusLbl.Size=UDim2.new(0,240,0,18);grabStatusLbl.Position=UDim2.new(0.5,-120,0,16)
+grabStatusLbl.BackgroundTransparency=1;grabStatusLbl.TextColor3=C3(220,220,220)
+grabStatusLbl.Font=Enum.Font.GothamMedium;grabStatusLbl.TextSize=11;grabStatusLbl.Text=""
+grabStatusLbl.Visible=false
+
+local function isMyPlot(plot)
+	if not plot then return false end
+	local sign=plot:FindFirstChild("PlotSign")
+	if sign then
+		local yourBase=sign:FindFirstChild("YourBase")
+		if yourBase and yourBase:IsA("BillboardGui") and yourBase.Enabled then return true end
+	end
+	return false
+end
+
+local function isValidStealPrompt(prompt)
+	if not prompt or not prompt.Parent or not prompt.Enabled then return false end
+	local state=prompt:GetAttribute("State")
+	local actionText=prompt.ActionText
+	return state=="Steal" or state=="Grab" or actionText=="Steal" or actionText=="Grab"
+end
+
+local function findNearestSteal()
+	local char=lp.Character
+	local root=char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso"))
+	if not root then return nil end
+	local plots=workspace:FindFirstChild("Plots");if not plots then return nil end
+	local nearest,minDist=nil,150
+	for _,plot in ipairs(plots:GetChildren())do
+		if isMyPlot(plot) then continue end
+		local podiums=plot:FindFirstChild("AnimalPodiums");if not podiums then continue end
+		for _,podium in ipairs(podiums:GetChildren())do
+			local base=podium:FindFirstChild("Base")
+			local spawnPoint=base and base:FindFirstChild("Spawn")
+			local attachment=spawnPoint and spawnPoint:FindFirstChild("PromptAttachment")
+			if attachment then
+				for _,child in ipairs(attachment:GetChildren())do
+					if child:IsA("ProximityPrompt") and isValidStealPrompt(child) then
+						local d=(root.Position-child.Parent.WorldPosition).Magnitude
+						if d<minDist then minDist=d;nearest=child end
+					end
+				end
+			end
+		end
+	end
+	return nearest
+end
+
+local function firePromptConnections(prompt,signalName)
+	local ok,conns=pcall(getconnections,prompt[signalName])
+	if not ok or not conns then return end
+	for _,conn in ipairs(conns)do
+		if conn.Function then task.spawn(conn.Function) end
+	end
+end
+
+local function executeSteal(prompt)
+	if isStealing or not prompt or not prompt.Parent then return end
+	isStealing=true
+	grabStatusLbl.Text="STEALING: "..(prompt.ObjectText or "ITEM")
+	firePromptConnections(prompt,"PromptButtonHoldBegan")
+	barFill.Size=UDim2.new(0,0,1,0)
+	local tw=TS:Create(barFill,TweenInfo.new(stealDelay,Enum.EasingStyle.Linear),{Size=UDim2.new(1,0,1,0)})
+	tw:Play();task.wait(stealDelay);tw:Cancel()
+	if prompt and prompt.Parent and prompt.Enabled then
+		firePromptConnections(prompt,"Triggered")
+	end
+	barFill.Size=UDim2.new(0,0,1,0)
+	isStealing=false
+end
+
+local playerESPEnabled=false;local playerBillboards={}
+local function makePlayerBB(player)
+	local bb=Instance.new("BillboardGui");bb.Name="KnoxPlayerESP_"..player.UserId;bb.Size=UDim2.new(0,100,0,20)
+	bb.StudsOffsetWorldSpace=V3(0,2.8,0);bb.AlwaysOnTop=true;bb.LightInfluence=0;bb.ResetOnSpawn=false
+	local lbl=Instance.new("TextLabel",bb);lbl.Size=UDim2.new(1,0,1,0)
+	lbl.BackgroundTransparency=1;lbl.Font=Enum.Font.GothamBold;lbl.TextSize=13
+	lbl.TextColor3=C3(0,225,255);lbl.TextXAlignment=Enum.TextXAlignment.Center
+	lbl.TextStrokeTransparency=0.4;lbl.TextStrokeColor3=C3(0,0,0);lbl.Text=player.Name
+	return bb
+end
+local function refreshPlayerESP()
+	for uid,entry in pairs(playerBillboards)do
+		if not PL:GetPlayerByUserId(uid)then
+			if entry.bb and entry.bb.Parent then pcall(function()entry.bb:Destroy()end)end;playerBillboards[uid]=nil
+		end
+	end
+	if not playerESPEnabled then return end
+	for _,player in ipairs(PL:GetPlayers())do
+		if player==lp then continue end
+		local char=player.Character;if not char then continue end
+		local hrp=char:FindFirstChild("HumanoidRootPart");if not hrp then continue end
+		local uid=player.UserId;local entry=playerBillboards[uid]
+		if not entry or not entry.bb or not entry.bb.Parent then
+			if entry and entry.bb then pcall(function()entry.bb:Destroy()end)end
+			local bb=makePlayerBB(player);bb.Adornee=hrp;bb.Parent=hrp
+			playerBillboards[uid]={bb=bb,player=player}
+		end
+	end
+end
+local function clearPlayerESP()
+	for uid,entry in pairs(playerBillboards)do
+		if entry.bb and entry.bb.Parent then pcall(function()entry.bb:Destroy()end)end;playerBillboards[uid]=nil
+	end
+end
+task.spawn(function()while true do task.wait(0.5);if playerESPEnabled then refreshPlayerESP()end end end)
+PL.PlayerAdded:Connect(function(p)p.CharacterAdded:Connect(function()task.wait(0.5);if playerESPEnabled then refreshPlayerESP()end end)end)
+
+local tracerEnabled=false;local tracerBeam=nil;local tracerAtt0=nil;local tracerAtt1=nil
+local tracerFolder=Instance.new("Folder",workspace);tracerFolder.Name="KnoxTracers"
+local function findMyPlot()
+	local plots=workspace:FindFirstChild("Plots");if not plots then return nil end
+	for _,plot in ipairs(plots:GetChildren())do
+		local sign=plot:FindFirstChild("PlotSign")
+		if sign then
+			local sg2=sign:FindFirstChildWhichIsA("SurfaceGui",true)
+			if sg2 then
+				local label=sg2:FindFirstChildWhichIsA("TextLabel",true)
+				if label then
+					local text=label.Text:lower()
+					if text:find(lp.DisplayName:lower(),1,true)or text:find(lp.Name:lower(),1,true)then return plot end
+				end
+			end
+		end
+		local attr=plot:GetAttribute("OwnerId")or plot:GetAttribute("Owner")
+		if attr==lp.UserId or attr==lp.Name then return plot end
+		local ov=plot:FindFirstChild("OwnerId")or plot:FindFirstChild("Owner")
+		if ov then
+			if(ov:IsA("NumberValue")and ov.Value==lp.UserId)or
+			  (ov:IsA("StringValue")and(ov.Value==lp.Name or tonumber(ov.Value)==lp.UserId))then return plot end
+		end
+	end
+	return nil
+end
+local function updateTracer()
+	if not tracerEnabled then
+		if tracerBeam then tracerBeam:Destroy();tracerBeam=nil end
+		if tracerAtt0 then tracerAtt0:Destroy();tracerAtt0=nil end
+		if tracerAtt1 then tracerAtt1:Destroy();tracerAtt1=nil end
+		return
+	end
+	local char=lp.Character;local hrp=char and char:FindFirstChild("HumanoidRootPart");if not hrp then return end
+	local myPlot=findMyPlot();if not myPlot then if tracerBeam then tracerBeam.Enabled=false end;return end
+	local targetPart=myPlot:FindFirstChild("MainRootPart")or myPlot:FindFirstChildWhichIsA("BasePart")
+	if not targetPart then if tracerBeam then tracerBeam.Enabled=false end;return end
+	if not tracerAtt0 or tracerAtt0.Parent~=hrp then if tracerAtt0 then tracerAtt0:Destroy()end;tracerAtt0=Instance.new("Attachment",hrp)end
+	if not tracerAtt1 or tracerAtt1.Parent~=targetPart then if tracerAtt1 then tracerAtt1:Destroy()end;tracerAtt1=Instance.new("Attachment",targetPart);tracerAtt1.Position=V3(0,5,0)end
+	if not tracerBeam then
+		tracerBeam=Instance.new("Beam",tracerFolder);tracerBeam.FaceCamera=true;tracerBeam.LightEmission=1
+		tracerBeam.Width0=0.7;tracerBeam.Width1=0.7;tracerBeam.TextureMode=Enum.TextureMode.Wrap;tracerBeam.TextureSpeed=0
+		tracerBeam.Transparency=NumberSequence.new(0);tracerBeam.Color=ColorSequence.new(C3(255,255,255))
+	end
+	tracerBeam.Attachment0=tracerAtt0;tracerBeam.Attachment1=tracerAtt1;tracerBeam.Enabled=true
+end
+task.spawn(function()while true do task.wait(0.5);pcall(updateTracer)end end)
+lp.CharacterAdded:Connect(function()task.wait(0.5);if tracerEnabled then pcall(updateTracer)end end)
+
+local brainrotEnabled=false
+local brainrotFolder=Instance.new("Folder",workspace);brainrotFolder.Name="KnoxBrainrotESP"
+local brainrotCurrentBB=nil
+local brainrotBeam=nil;local brainrotBAtt0=nil;local brainrotBAtt1=nil
+local brainrotLoopTask=nil
+local lastBrainrotKey=""
+
+local function parseBrainrotValue(text)
+	text=tostring(text or ""):gsub("%s","")
+	local num,suffix=text:match("([%d%.]+)([KkMmBbTt]?)")
+	if not num then return 0 end
+	num=tonumber(num)or 0
+	local mult={K=1e3,M=1e6,B=1e9,T=1e12}
+	return num*(mult[(suffix or ""):upper()]or 1)
+end
+local function destroyBrainrotBeam()
+	if brainrotBeam then brainrotBeam:Destroy();brainrotBeam=nil end
+	if brainrotBAtt0 then brainrotBAtt0:Destroy();brainrotBAtt0=nil end
+	if brainrotBAtt1 then brainrotBAtt1:Destroy();brainrotBAtt1=nil end
+end
+local function updateBrainrotBeam(targetPart)
+	local char=lp.Character;local hrp=char and char:FindFirstChild("HumanoidRootPart")
+	if not hrp or not targetPart or not targetPart.Parent then destroyBrainrotBeam();return end
+	if not brainrotBAtt0 or brainrotBAtt0.Parent~=hrp then if brainrotBAtt0 then brainrotBAtt0:Destroy()end;brainrotBAtt0=Instance.new("Attachment",hrp)end
+	if not brainrotBAtt1 or brainrotBAtt1.Parent~=targetPart then if brainrotBAtt1 then brainrotBAtt1:Destroy()end;brainrotBAtt1=Instance.new("Attachment",targetPart)end
+	if not brainrotBeam then
+		brainrotBeam=Instance.new("Beam",brainrotFolder);brainrotBeam.FaceCamera=true;brainrotBeam.LightEmission=1
+		brainrotBeam.Width0=0.8;brainrotBeam.Width1=0.8;brainrotBeam.TextureMode=Enum.TextureMode.Wrap;brainrotBeam.TextureSpeed=0
+		brainrotBeam.Transparency=NumberSequence.new(0);brainrotBeam.Color=ColorSequence.new(C3(255,30,30))
+	end
+	brainrotBeam.Attachment0=brainrotBAtt0;brainrotBeam.Attachment1=brainrotBAtt1;brainrotBeam.Enabled=true
+end
+local function makeBrainrotBillboard(part,displayText,valueText)
+	if brainrotCurrentBB then pcall(function()brainrotCurrentBB:Destroy()end);brainrotCurrentBB=nil end
+	if not part then return end
+	local bb=Instance.new("BillboardGui");bb.Name="KnoxBrainrotESP";bb.Size=UDim2.new(0,200,0,50)
+	bb.AlwaysOnTop=true;bb.StudsOffset=V3(0,3,0);bb.Adornee=part;bb.Parent=part
+	local nl=Instance.new("TextLabel",bb);nl.Size=UDim2.new(1,0,0,25)
+	nl.BackgroundTransparency=1;nl.TextScaled=true;nl.Font=Enum.Font.GothamBold
+	nl.Text=displayText;nl.TextColor3=C3(255,255,0);nl.TextStrokeTransparency=0.5
+	local vl=Instance.new("TextLabel",bb);vl.Size=UDim2.new(1,0,0,25);vl.Position=UDim2.new(0,0,0,25)
+	vl.BackgroundTransparency=1;vl.TextScaled=true;vl.Font=Enum.Font.GothamBold
+	vl.Text=valueText;vl.TextColor3=C3(0,255,100);vl.TextStrokeTransparency=0.5
+	brainrotCurrentBB=bb
+end
+local Hub
+
+local function scanBrainrotDebris()
+	if not brainrotEnabled then return end
+	local debris=workspace:FindFirstChild("Debris");if not debris then return end
+	local best={value=-1,part=nil,displayText="",valueText=""}
+	for _,template in ipairs(debris:GetChildren())do
+		if template.Name=="FastOverheadTemplate"then
+			local surfaceGui=template:FindFirstChildOfClass("SurfaceGui");if not surfaceGui then continue end
+			local genLabel=surfaceGui:FindFirstChild("Generation",true)
+			if not genLabel or not genLabel:IsA("TextLabel")then continue end
+			local text=genLabel.Text or ""
+			if text~=""and(text:find("/s")or text:find("K")or text:find("M")or text:find("B"))then
+				local val=parseBrainrotValue(text)
+				if val>best.value then
+					local targetPart=surfaceGui.Adornee
+					if targetPart and targetPart:IsA("BasePart")then
+						local dn=surfaceGui:FindFirstChild("DisplayName",true)
+						best={value=val,part=targetPart,displayText=(dn and dn.Text)or"Pet",valueText=text}
+					end
+				end
+			end
+		end
+	end
+	if best.part and best.part.Parent then
+
+		local newKey=best.displayText.."|"..best.valueText
+		if newKey~=lastBrainrotKey then
+			lastBrainrotKey=newKey
+			if Hub then
+				pcall(function()
+					Hub:Notify({Title="New Best Brainrot!",Content=best.displayText.." — "..best.valueText,Duration=4})
+				end)
+			end
+		end
+		makeBrainrotBillboard(best.part,best.displayText,best.valueText)
+		updateBrainrotBeam(best.part)
+	else
+		if brainrotCurrentBB then pcall(function()brainrotCurrentBB:Destroy()end);brainrotCurrentBB=nil end
+		destroyBrainrotBeam()
+	end
+end
+local function startBrainrotESP()
+	if brainrotLoopTask then return end
+	brainrotLoopTask=task.spawn(function()while brainrotEnabled do pcall(scanBrainrotDebris);task.wait(0.5)end end)
+end
+local function clearBrainrotESP()
+	brainrotEnabled=false;if brainrotLoopTask then pcall(task.cancel,brainrotLoopTask);brainrotLoopTask=nil end
+	if brainrotCurrentBB then pcall(function()brainrotCurrentBB:Destroy()end);brainrotCurrentBB=nil end
+	destroyBrainrotBeam();lastBrainrotKey=""
+end
+lp.CharacterAdded:Connect(function()task.wait(0.5);if brainrotEnabled then pcall(scanBrainrotDebris)end end)
+
+local antiBeeEnabled=false;local antiBeeDescConn=nil;local antiBeeFovConn=nil
+local FOV_LOCK=70
+local ANTI_BEE_BLACKLIST={"BlurEffect","ColorCorrectionEffect","BloomEffect","SunRaysEffect","DepthOfFieldEffect","Atmosphere","Sky","ParticleEmitter","Beam","Trail","Highlight","PostEffect","SurfaceAppearance","Fire","Sparkles","PointLight","SpotLight","SurfaceLight","Bloom","Clouds","FogVolume"}
+local function isBeeEffect(obj)for _,name in ipairs(ANTI_BEE_BLACKLIST)do if obj:IsA(name)then return true end end;return false end
+local function clearBeeEffects()for _,v in pairs(LT:GetDescendants())do if isBeeEffect(v)then pcall(function()v:Destroy()end)end end end
+local function enableAntiBee()
+	if antiBeeEnabled then return end;antiBeeEnabled=true;clearBeeEffects()
+	antiBeeDescConn=LT.DescendantAdded:Connect(function(obj)if not antiBeeEnabled then return end;task.wait();if isBeeEffect(obj)then pcall(function()obj:Destroy()end)end end)
+	antiBeeFovConn=RS.RenderStepped:Connect(function()if not antiBeeEnabled then return end;local cam=workspace.CurrentCamera;if cam and cam.FieldOfView~=FOV_LOCK then cam.FieldOfView=FOV_LOCK end end)
+end
+local function disableAntiBee()
+	if not antiBeeEnabled then return end;antiBeeEnabled=false
+	if antiBeeDescConn then antiBeeDescConn:Disconnect();antiBeeDescConn=nil end
+	if antiBeeFovConn then antiBeeFovConn:Disconnect();antiBeeFovConn=nil end
+end
+
+local antiRagV2Conns={}
+local cleanRagV2Scheduled=false
+local function cleanRagV2(char)
+	if not char then return end
+	for _,d in ipairs(char:GetDescendants())do
+		if d:IsA("BallSocketConstraint")or d:IsA("NoCollisionConstraint")or d:IsA("HingeConstraint")
+		  or(d:IsA("Attachment")and(d.Name=="A"or d.Name=="B"))
+		  or d:IsA("BodyVelocity")or d:IsA("BodyPosition")or d:IsA("BodyGyro")then
+			pcall(function()d:Destroy()end)
+		end
+	end
+	for _,d in ipairs(char:GetDescendants())do if d:IsA("Motor6D")then d.Enabled=true end end
+	local hum=char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		local anim=hum:FindFirstChild("Animator")
+		if anim then
+			for _,track in ipairs(anim:GetPlayingAnimationTracks())do
+				local n=track.Animation and track.Animation.Name:lower()or""
+				if n:find("rag")or n:find("fall")or n:find("hurt")or n:find("down")then track:Stop(0)end
+			end
+		end
+	end
+	task.defer(function()pcall(function()local pm=lp:FindFirstChild("PlayerScripts");if pm then pm=pm:FindFirstChild("PlayerModule")end;if pm then require(pm):GetControls():Enable()end end)end)
+end
+local function isRagV2Desc(obj)
+	return obj:IsA("BallSocketConstraint")or obj:IsA("NoCollisionConstraint")or obj:IsA("HingeConstraint")
+	  or(obj:IsA("Attachment")and(obj.Name=="A"or obj.Name=="B"))
+	  or obj:IsA("BodyVelocity")or obj:IsA("BodyPosition")or obj:IsA("BodyGyro")
+end
+local function hookAntiRagV2(char)
+	for _,c in ipairs(antiRagV2Conns)do pcall(function()c:Disconnect()end)end;antiRagV2Conns={}
+	local hum=char:WaitForChild("Humanoid",10);local hrp=char:WaitForChild("HumanoidRootPart",10)
+	if not hum or not hrp then return end
+	local lastVel=Vector3.zero
+	local c1=hum.StateChanged:Connect(function()
+		local st=hum:GetState()
+		if st==Enum.HumanoidStateType.Physics or st==Enum.HumanoidStateType.Ragdoll
+		  or st==Enum.HumanoidStateType.FallingDown or st==Enum.HumanoidStateType.GettingUp then
+			hum:ChangeState(Enum.HumanoidStateType.Running);cleanRagV2(char)
+			pcall(function()workspace.CurrentCamera.CameraSubject=hum end)
+			task.defer(function()pcall(function()local pm=lp:FindFirstChild("PlayerScripts");if pm then pm=pm:FindFirstChild("PlayerModule")end;if pm then require(pm):GetControls():Enable()end end)end)
+		end
+	end)
+	table.insert(antiRagV2Conns,c1)
+	local c2=char.DescendantAdded:Connect(function(desc)
+		if isRagV2Desc(desc)and not cleanRagV2Scheduled then
+			cleanRagV2Scheduled=true
+			task.defer(function()cleanRagV2Scheduled=false;if char and char.Parent then cleanRagV2(char)end end)
+		end
+	end)
+	table.insert(antiRagV2Conns,c2)
+	local c3=RS.Heartbeat:Connect(function()
+		local st=hum:GetState()
+		if st==Enum.HumanoidStateType.Physics or st==Enum.HumanoidStateType.Ragdoll
+		  or st==Enum.HumanoidStateType.FallingDown or st==Enum.HumanoidStateType.GettingUp then
+			cleanRagV2(char)
+			local vel=hrp.AssemblyLinearVelocity
+			if(vel-lastVel).Magnitude>40 and vel.Magnitude>25 then hrp.AssemblyLinearVelocity=vel.Unit*math.min(vel.Magnitude,15)end
+		end
+		lastVel=hrp.AssemblyLinearVelocity
+	end)
+	table.insert(antiRagV2Conns,c3);cleanRagV2(char)
+end
+local antiRagV2CharConn=nil
+local function startAntiRagV2()
+	local char=lp.Character;if char then task.spawn(function()hookAntiRagV2(char)end)end
+	if antiRagV2CharConn then antiRagV2CharConn:Disconnect()end
+	antiRagV2CharConn=lp.CharacterAdded:Connect(function(c)task.spawn(function()hookAntiRagV2(c)end)end)
+end
+local function stopAntiRagV2()
+	for _,c in ipairs(antiRagV2Conns)do pcall(function()c:Disconnect()end)end;antiRagV2Conns={}
+	if antiRagV2CharConn then antiRagV2CharConn:Disconnect();antiRagV2CharConn=nil end
+end
+
+local autoResetBalloon=false
+local function executeReset()
+	local char=lp.Character;if not char then return end
+	local hrp=char:FindFirstChild("HumanoidRootPart");if hrp then hrp.CFrame=CFrame.new(0,15000,0)end
+end
+task.spawn(function()
+	local phrase='ran "balloon" on you'
+	while true do
+		task.wait(1);if not autoResetBalloon then continue end
+		local pg=lp:FindFirstChild("PlayerGui");if not pg then continue end
+		for _,gui in ipairs(pg:GetDescendants())do
+			local txt=(gui:IsA("TextLabel")or gui:IsA("TextButton"))and gui.Text
+			if txt and string.find(txt,phrase)then executeReset();break end
+		end
+	end
+end)
+
+local ABD={running=false,conns={},origMove=nil,ctrlProtected=false,
+	badNames={Blue=true,DiscoEffect=true,BeeBlur=true,ColorCorrection=true}}
+local function abd_nuke(obj)
+	if not obj or not obj.Parent then return end
+	if ABD.badNames[obj.Name]then pcall(function()obj:Destroy()end)end
+end
+local function abd_protectControls()
+	if ABD.ctrlProtected then return end
+	pcall(function()
+		local PS=lp:FindFirstChild("PlayerScripts");local PM=PS and PS:FindFirstChild("PlayerModule")
+		if not PM then return end
+		local Controls=require(PM):GetControls();if not Controls then return end
+		if not ABD.origMove then ABD.origMove=Controls.moveFunction end
+		local function protMove(self,mv,rtc)if ABD.origMove then ABD.origMove(self,mv,rtc)end end
+		table.insert(ABD.conns,RS.Heartbeat:Connect(function()
+			if not ABD.running then return end
+			if Controls.moveFunction~=protMove then Controls.moveFunction=protMove end
+		end))
+		Controls.moveFunction=protMove;ABD.ctrlProtected=true
+	end)
+end
+local function abd_restoreControls()
+	if not ABD.ctrlProtected then return end
+	pcall(function()
+		local PS=lp:FindFirstChild("PlayerScripts");local PM=PS and PS:FindFirstChild("PlayerModule")
+		if not PM then return end
+		local Controls=require(PM):GetControls()
+		if Controls and ABD.origMove then Controls.moveFunction=ABD.origMove;ABD.ctrlProtected=false end
+	end)
+end
+local function abd_blockSound()
+	pcall(function()
+		local PS=lp:FindFirstChild("PlayerScripts");local bee=PS and PS:FindFirstChild("Bee",true)
+		if bee then local bz=bee:FindFirstChild("Buzzing");if bz and bz:IsA("Sound")then bz:Stop();bz.Volume=0 end end
+	end)
+end
+local function enableAntiBeeDisco()
+	if ABD.running then return end;ABD.running=true
+	for _,inst in ipairs(LT:GetDescendants())do abd_nuke(inst)end
+	table.insert(ABD.conns,LT.DescendantAdded:Connect(function(obj)if not ABD.running then return end;abd_nuke(obj)end))
+	abd_protectControls()
+	table.insert(ABD.conns,RS.Heartbeat:Connect(function()if not ABD.running then return end;abd_blockSound()end))
+end
+local function disableAntiBeeDisco()
+	if not ABD.running then return end;ABD.running=false;abd_restoreControls()
+	for _,c in ipairs(ABD.conns)do if typeof(c)=="RBXScriptConnection"then c:Disconnect()end end
+	ABD.conns={}
+end
+
+local kickOnSteal=false
+task.spawn(function()
+	while true do
+		task.wait(0.5);if not kickOnSteal then continue end
+		local pg=lp:FindFirstChild("PlayerGui");if not pg then continue end
+		for _,gui in ipairs(pg:GetDescendants())do
+			local txt=(gui:IsA("TextLabel")or gui:IsA("TextButton"))and gui.Text
+			if txt and string.find(txt,"You stole")then
+				lp:Kick("KnoxHub – Kick On Steal");return
+			end
+		end
+	end
+end)
+
+local function rejoinServer()
+	pcall(function()TP:Teleport(game.PlaceId,lp)end)
+end
+local function serverHop()
+	task.spawn(function()
+		local ok,raw=pcall(function()
+			return game:HttpGet("https://games.roblox.com/v1/games/"..game.PlaceId.."/servers/Public?sortOrder=Asc&limit=100")
+		end)
+		if ok and raw then
+			local ok2,data=pcall(function()return HS2:JSONDecode(raw)end)
+			if ok2 and data and data.data then
+				for _,server in ipairs(data.data)do
+					if server.id~=game.JobId and server.playing and server.maxPlayers and server.playing<server.maxPlayers then
+						pcall(function()TP:TeleportToPlaceInstance(game.PlaceId,server.id,lp)end)
+						return
+					end
+				end
+			end
+		end
+		pcall(function()TP:Teleport(game.PlaceId,lp)end)
+	end)
+end
+
+Hub=Ascended.new({Name="KnoxHub",ConfigurationSaving=true})
+
+local MainTab=Hub:CreateTab("Main")
+
+local AdminRemote = nil
+task.spawn(function()
+	if not lp.Character then lp.CharacterAdded:Wait() end
+	task.wait(1)
+	local ok, net = pcall(function()
+		return game:GetService("ReplicatedStorage"):WaitForChild("Packages"):WaitForChild("Net")
+	end)
+	if not ok or not net then return end
+	local children = net:GetChildren()
+	local byIdx, byName = {}, {}
+	for i, obj in ipairs(children) do
+		byIdx[i] = obj
+		byName[obj.Name] = i
+	end
+	local anchorIdx = byName["RF/a0e78691-cb9b-4efc-ac08-9c06fea70059"]
+	if anchorIdx then
+		local actual = byIdx[anchorIdx + 1]
+		if actual then AdminRemote = actual end
+	end
+end)
+
+local function fireAdmin(...)
+	if not AdminRemote then return end
+	local a = {...}
+	task.spawn(function()
+		AdminRemote:InvokeServer(unpack(a))
+	end)
+end
+
+local function getNearestPlayer()
+	local char = lp.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return nil end
+	local nearest, minDist = nil, math.huge
+	for _, player in ipairs(PL:GetPlayers()) do
+		if player == lp then continue end
+		local pChar = player.Character
+		local pHrp = pChar and pChar:FindFirstChild("HumanoidRootPart")
+		if not pHrp then continue end
+		local dist = (hrp.Position - pHrp.Position).Magnitude
+		if dist < minDist then minDist = dist; nearest = player end
+	end
+	return nearest
+end
+
+local apIsSpamming = false
+local apSpamTask = nil
+local spamAPMiniBtn = nil
+
+local function apSpamLoop()
+	local id = "f888ee6e-c86d-46e1-93d7-0639d6635d42"
+	while apIsSpamming do
+		local target = getNearestPlayer()
+		if target then
+			task.wait(0.3); fireAdmin(id, target, "balloon")
+			task.wait(0.3); fireAdmin(id, target, "ragdoll")
+			task.wait(0.3); fireAdmin(id, target, "jumpscare")
+			task.wait(0.3); fireAdmin(id, target, "rocket")
+			task.wait(0.3); fireAdmin(id, target, "jail")
+		else
+			task.wait(0.5)
+		end
+	end
+end
+
+local function toggleAPSpam()
+	apIsSpamming = not apIsSpamming
+	if apIsSpamming then
+		apSpamTask = task.spawn(apSpamLoop)
+	else
+		if apSpamTask then task.cancel(apSpamTask); apSpamTask = nil end
+	end
+end
+
+MainTab:CreateToggle({Name="AdminPanelNearest",Flag="AdminPanelNearest",CurrentValue=false,Callback=function(state)
+	if state then
+		if not spamAPMiniBtn then
+			spamAPMiniBtn = Hub:CreateMiniActionButton({
+				Flag = "SpamAP",
+				Label = "SpamAP",
+				Callback = function()
+					task.spawn(toggleAPSpam)
+				end
+			})
+		end
+		spamAPMiniBtn.gui.Enabled = true
+	else
+		apIsSpamming = false
+		if apSpamTask then task.cancel(apSpamTask); apSpamTask = nil end
+		if spamAPMiniBtn then spamAPMiniBtn.gui.Enabled = false end
+	end
+end})
+
+local carpetFlying=false
+local carpetMiniBtn=nil
+
+lp.CharacterAdded:Connect(function()
+	carpetFlying=false
+end)
+
+local function getBestBrainrotPart()
+	local debris=workspace:FindFirstChild("Debris");if not debris then return nil end
+	local best={value=-1,part=nil}
+	for _,template in ipairs(debris:GetChildren())do
+		if template.Name=="FastOverheadTemplate" then
+			local surfaceGui=template:FindFirstChildOfClass("SurfaceGui");if not surfaceGui then continue end
+			local genLabel=surfaceGui:FindFirstChild("Generation",true)
+			if not genLabel or not genLabel:IsA("TextLabel") then continue end
+			local text=genLabel.Text or ""
+			if text~="" and (text:find("/s") or text:find("K") or text:find("M") or text:find("B")) then
+				local val=parseBrainrotValue(text)
+				if val>best.value then
+					local targetPart=surfaceGui.Adornee
+					if targetPart and targetPart:IsA("BasePart") then
+						best={value=val,part=targetPart}
+					end
+				end
+			end
+		end
+	end
+	return best.part
+end
+
+local function hasCarpetInInventory()
+	return lp.Backpack:FindFirstChild("Flying Carpet")~=nil
+		or (lp.Character and lp.Character:FindFirstChild("Flying Carpet")~=nil)
+end
+
+local function equipCarpet()
+	local char=lp.Character;if not char then return nil end
+	local hum=char:FindFirstChildOfClass("Humanoid");if not hum then return nil end
+	local tool=lp.Backpack:FindFirstChild("Flying Carpet") or char:FindFirstChild("Flying Carpet")
+	if tool then hum:EquipTool(tool) end
+	return char:FindFirstChild("Flying Carpet")
+end
+
+local function unequipCarpet()
+	local char=lp.Character;if not char then return end
+	local hum=char:FindFirstChildOfClass("Humanoid");if not hum then return end
+	pcall(function() hum:UnequipTools() end)
+end
+
+local function safeStop(lv, att, hrp)
+	pcall(function()
+		if lv and lv.Parent then
+			lv.VectorVelocity = Vector3.zero
+			lv.MaxForce = 0
+			task.wait()
+			lv:Destroy()
+		end
+	end)
+	pcall(function()
+		if att and att.Parent then att:Destroy() end
+	end)
+	pcall(function()
+		if hrp and hrp.Parent then
+			hrp.AssemblyLinearVelocity  = Vector3.zero
+			hrp.AssemblyAngularVelocity = Vector3.zero
+		end
+	end)
+end
+
+local function wallCheck(hrp, dir, dist)
+	if dir.Magnitude == 0 then return false end
+	local rp = RaycastParams.new()
+	rp.FilterDescendantsInstances = {lp.Character}
+	rp.FilterType = Enum.RaycastFilterType.Exclude
+	local result = workspace:Raycast(hrp.Position, dir.Unit * dist, rp)
+	return result ~= nil
+end
+
+local function runCarpetFly()
+	if carpetFlying then return end
+	if not hasCarpetInInventory() then return end
+
+	carpetFlying = true
+
+	local char = lp.Character
+	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+	local hum  = char and char:FindFirstChildOfClass("Humanoid")
+	if not hrp or not hum then carpetFlying = false; return end
+
+	local targetPart = getBestBrainrotPart()
+	if not targetPart or not targetPart.Parent then carpetFlying = false; return end
+
+	equipCarpet()
+	task.wait(0.3)
+
+	char = lp.Character
+	hrp  = char and char:FindFirstChild("HumanoidRootPart")
+	hum  = char and char:FindFirstChildOfClass("Humanoid")
+	if not hrp or not hum then carpetFlying = false; return end
+
+	for _, v in ipairs(hrp:GetChildren()) do
+		if v:IsA("LinearVelocity") or v:IsA("BodyVelocity") or v:IsA("BodyPosition")
+			or (v:IsA("Attachment") and v.Name == "KnoxCarpetAtt") then
+			pcall(function() v:Destroy() end)
+		end
+	end
+
+	local att = Instance.new("Attachment")
+	att.Name  = "KnoxCarpetAtt"
+	att.Parent = hrp
+
+	local lv = Instance.new("LinearVelocity")
+	lv.Name                  = "KnoxCarpetLV"
+	lv.Attachment0           = att
+	lv.MaxForce              = 500000
+	lv.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+	lv.VectorVelocity        = Vector3.zero
+	lv.RelativeTo            = Enum.ActuatorRelativeTo.World
+	lv.Parent                = hrp
+
+	local SPEED      = 110
+	local ARRIVE_XZ  = 2.5
+	local ARRIVE_Y   = 1.5
+	local WALL_DIST  = 3.5
+	local SLOW_DIST  = 12
+	local dt         = 1/60
+
+	local targetY   = targetPart.Position.Y
+	local yTimeout  = tick() + 8
+
+	while carpetFlying and tick() < yTimeout do
+		if not hrp or not hrp.Parent then safeStop(lv,att,hrp); carpetFlying=false; return end
+		local yDiff = targetY - hrp.Position.Y
+		if math.abs(yDiff) <= ARRIVE_Y then break end
+
+		local yDir = Vector3.new(0, math.sign(yDiff), 0)
+
+		if wallCheck(hrp, yDir, WALL_DIST) then
+			lv.VectorVelocity = Vector3.zero
+			break
+		end
+
+		local ySpeed = math.min(SPEED, math.abs(yDiff) * 6)
+		ySpeed = math.max(ySpeed, 8)
+		lv.VectorVelocity = Vector3.new(0, math.sign(yDiff) * ySpeed, 0)
+		task.wait(dt)
+	end
+
+	lv.VectorVelocity = Vector3.zero
+	if hrp and hrp.Parent then
+		hrp.AssemblyLinearVelocity = Vector3.zero
+	end
+	task.wait(0.05)
+
+	local xzTimeout = tick() + 15
+
+	while carpetFlying and tick() < xzTimeout do
+		if not hrp or not hrp.Parent then safeStop(lv,att,hrp); carpetFlying=false; return end
+
+		local fresh = (targetPart.Parent and targetPart.Position) or nil
+		if not fresh then break end
+
+		local flatDiff = Vector3.new(fresh.X - hrp.Position.X, 0, fresh.Z - hrp.Position.Z)
+		local dist     = flatDiff.Magnitude
+
+		if dist <= ARRIVE_XZ then break end
+
+		local dir = flatDiff.Unit
+
+		if wallCheck(hrp, dir, WALL_DIST) then
+			lv.VectorVelocity = Vector3.zero
+
+			for _ = 1, 6 do
+				if hrp and hrp.Parent then
+					hrp.AssemblyLinearVelocity = hrp.AssemblyLinearVelocity * 0.3
+				end
+				task.wait(dt)
+			end
+			if hrp and hrp.Parent then hrp.AssemblyLinearVelocity = Vector3.zero end
+			break
+		end
+
+		local speed = dist > SLOW_DIST and SPEED or math.max(10, SPEED * (dist / SLOW_DIST))
+		lv.VectorVelocity = dir * speed
+
+		local yDriftErr = targetY - hrp.Position.Y
+		if math.abs(yDriftErr) > 0.8 then
+			lv.VectorVelocity = Vector3.new(
+				lv.VectorVelocity.X,
+				math.clamp(yDriftErr * 4, -20, 20),
+				lv.VectorVelocity.Z
+			)
+		end
+
+		task.wait(dt)
+	end
+
+	safeStop(lv, att, hrp)
+	unequipCarpet()
+	carpetFlying = false
+end
+
+MainTab:CreateToggle({Name="CarpetFlyToBest",Flag="CarpetFlyToBest",CurrentValue=false,Callback=function(state)
+	if state then
+		if not carpetMiniBtn then
+			carpetMiniBtn=Hub:CreateMiniActionButton({
+				Flag="CarpetFlyMini",
+				Label="Fly",
+				Callback=function()
+					if not carpetFlying then
+						task.spawn(runCarpetFly)
+					end
+				end
+			})
+		end
+		carpetMiniBtn.gui.Enabled=true
+	else
+		if carpetMiniBtn then carpetMiniBtn.gui.Enabled=false end
+		if carpetFlying then
+			carpetFlying=false
+			pcall(function()
+				local char=lp.Character
+				local hrp=char and char:FindFirstChild("HumanoidRootPart")
+				if hrp then hrp.Anchored=false end
+			end)
+			unequipCarpet()
+		end
+	end
+end})
+
+local flashTpEnabled      = false
+local flashTpPercent      = 92
+local flashTpAlignEnabled = false
+local flashTpAlignMiniBtn = nil
+local flashTpAutoPoint    = false
+
+local ftpLastPotionTime = 0
+local FTP_POTION_CD     = 30
+
+local function ftpUseGiantPotion()
+	if tick() - ftpLastPotionTime < FTP_POTION_CD then return end
+	task.wait(0.05)
+	local char = lp.Character
+	local bp   = lp:FindFirstChild("Backpack")
+	if char and bp then
+		for _, pot in ipairs(bp:GetChildren()) do
+			if pot:IsA("Tool") and pot.Name:lower():find("giant") then
+				local dur = pot:GetAttribute("Durability")
+				if dur and dur <= 0 then return end
+				local hum2 = char:FindFirstChildOfClass("Humanoid")
+				if hum2 then
+					hum2:EquipTool(pot)
+					task.wait(0.05)
+					pcall(function() pot:Activate() end)
+					ftpLastPotionTime = tick()
+				end
+				break
+			end
+		end
+	end
+end
+
+local function equipFlashTeleportTool()
+	local char = lp.Character
+	local bp   = lp:FindFirstChild("Backpack")
+	if not char or not bp then return false end
+	for _, tool in ipairs(bp:GetChildren()) do
+		if tool:IsA("Tool") and (tool.Name:lower():find("flash") or tool.Name:lower():find("teleport")) then
+			local cur = char:FindFirstChildOfClass("Tool")
+			if cur then cur.Parent = bp end
+			tool.Parent = char
+			task.wait(0.1)
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if hum then hum:EquipTool(tool) end
+			return true
+		end
+	end
+	return false
+end
+
+local podiumMarkers = {}
+
+local function spawnPodiumMarkers()
+	for _, m in pairs(podiumMarkers) do
+		if m and m.part and m.part.Parent then m.part:Destroy() end
+	end
+	podiumMarkers = {}
+	local plots = workspace:FindFirstChild("Plots"); if not plots then return end
+	for _, plot in ipairs(plots:GetChildren()) do
+		if plot:IsA("Model") then
+			local podiums = plot:FindFirstChild("AnimalPodiums")
+			if podiums then
+				for _, pod in ipairs(podiums:GetChildren()) do
+					if pod:IsA("Model") and pod:FindFirstChild("Base") then
+						local cf = pod:GetPivot()
+						local pos = cf.Position
+						local frontOffset = cf.LookVector * 0.3
+						local marker = Instance.new("Part")
+						marker.Name = "PodiumAlignMarker"
+						marker.Size = V3(0.5,0.5,0.5)
+						marker.Position = V3(pos.X+frontOffset.X, pos.Y+0.5, pos.Z+frontOffset.Z)
+						marker.Anchored = true
+						marker.CanCollide = false
+						marker.CastShadow = false
+						marker.Material = Enum.Material.Neon
+						marker.Color = C3(0,200,255)
+						marker.Parent = workspace
+						local light = Instance.new("PointLight")
+						light.Brightness = 1.5; light.Range = 4
+						light.Color = C3(0,200,255); light.Parent = marker
+						table.insert(podiumMarkers, {part=marker, lookVector=cf.LookVector})
+					end
+				end
+			end
+		end
+	end
+end
+spawnPodiumMarkers()
+
+local function findNearestMarker()
+	local char = lp.Character; if not char then return nil, nil end
+	local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso"); if not hrp then return nil, nil end
+	local bestPos, bestLook, bestDist = nil, nil, math.huge
+	for _, entry in pairs(podiumMarkers) do
+		if entry.part and entry.part.Parent then
+			local d = (hrp.Position - entry.part.Position).Magnitude
+			if d < bestDist then
+				bestDist = d
+				bestPos = entry.part.Position
+				bestLook = entry.lookVector
+			end
+		end
+	end
+	return bestPos, bestLook
+end
+
+local function doFlashAlign()
+	local targetPos, podiumLook = findNearestMarker(); if not targetPos then return end
+	local char = lp.Character; if not char then return end
+	local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso"); if not hrp then return end
+
+	local attachment = Instance.new("Attachment")
+	attachment.Name = "VelocityAttachment"
+	attachment.Parent = hrp
+	local linearVelocity = Instance.new("LinearVelocity")
+	linearVelocity.Name = "TargetLinearVelocity"
+	linearVelocity.Attachment0 = attachment
+	linearVelocity.MaxForce = 90000
+	linearVelocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+	linearVelocity.VectorVelocity = V3(0,0,0)
+	linearVelocity.Parent = hrp
+
+	local moveSpeed = 14
+	local startTime = os.clock()
+	while os.clock() - startTime < 3 do
+		local currentPos = hrp.Position
+		local direction = V3(targetPos.X-currentPos.X, 0, targetPos.Z-currentPos.Z)
+		local distance = direction.Magnitude
+		if distance <= 1.5 then break end
+		local speed = math.min(moveSpeed, distance * 8)
+		linearVelocity.VectorVelocity = direction.Unit * speed
+		task.wait()
+	end
+
+	linearVelocity.VectorVelocity = V3(0,0,0)
+	hrp.AssemblyLinearVelocity = V3(0,0,0)
+	linearVelocity:Destroy()
+	attachment:Destroy()
+
+	hrp.CFrame = CFrame.new(V3(targetPos.X, hrp.Position.Y, targetPos.Z))
+	task.wait(0.1)
+
+	local cam = workspace.CurrentCamera
+	if cam then
+		local camPos = hrp.Position + V3(0,3,0)
+		local flatDir = V3(-podiumLook.X, 0, -podiumLook.Z).Unit
+		local upAngle = math.rad(28.4)
+		local newLook = (flatDir * math.cos(upAngle) + V3(0,1,0) * math.sin(upAngle)).Unit
+		cam.CFrame = CFrame.lookAt(camPos, camPos + newLook)
+	end
+end
+
+local flashActiveTriggers = {}
+local flashPromptConn = nil
+
+local function startFlashTpListener()
+	if flashPromptConn then flashPromptConn:Disconnect(); flashPromptConn = nil end
+	local PPS = game:GetService("ProximityPromptService")
+	flashPromptConn = PPS.PromptButtonHoldBegan:Connect(function(prompt)
+		local a = prompt.ActionText and prompt.ActionText:lower() or ""
+		local o = prompt.ObjectText  and prompt.ObjectText:lower()  or ""
+		if not (a:find("steal") or o:find("steal")) then return end
+		if flashActiveTriggers[prompt] then return end
+		flashActiveTriggers[prompt] = true
+		local startT = os.clock()
+		local fired  = false
+		local threshold = flashTpPercent / 100
+		local conn
+		conn = RS.PreRender:Connect(function()
+			if not prompt or not prompt.Parent then
+				conn:Disconnect(); flashActiveTriggers[prompt] = nil; return
+			end
+
+			local prog = math.clamp((os.clock() - startT) / prompt.HoldDuration, 0, 1)
+			if not fired and prog >= threshold then
+				fired = true
+				conn:Disconnect()
+				flashActiveTriggers[prompt] = nil
+				local char = lp.Character
+				if char then
+					local tool = char:FindFirstChildOfClass("Tool")
+					if tool then pcall(function() tool:Activate() end) end
+				end
+				if flashTpAutoPoint then task.spawn(ftpUseGiantPotion) end
+			end
+		end)
+		prompt.PromptButtonHoldEnded:Connect(function()
+			if not fired then conn:Disconnect(); flashActiveTriggers[prompt] = nil end
+		end)
+	end)
+end
+
+local function stopFlashTpListener()
+	if flashPromptConn then flashPromptConn:Disconnect(); flashPromptConn = nil end
+	flashActiveTriggers = {}
+end
+
+local FlashTab = Hub:CreateTab("Flash Tp")
+FlashTab:CreateSection("Flash Teleport")
+
+FlashTab:CreateToggle({Name="FlashTp",Flag="FlashTp",CurrentValue=false,Callback=function(state)
+	flashTpEnabled = state
+	if state then
+		startFlashTpListener()
+	else
+		stopFlashTpListener()
+	end
+end})
+
+FlashTab:CreateSlider({
+	Name="Activation",
+	Flag="FlashTpPercent",
+	Min=80,
+	Max=100,
+	CurrentValue=92,
+	Callback=function(v)
+		flashTpPercent = v
+	end
+})
+
+FlashTab:CreateSection("Auto Potion")
+
+FlashTab:CreateToggle({Name="Auto Potion",Flag="FlashTpAutoPotion",CurrentValue=false,Callback=function(state)
+	flashTpAutoPoint = state
+end})
+
+FlashTab:CreateSection("Align")
+
+FlashTab:CreateToggle({Name="Align",Flag="FlashTpAlign",CurrentValue=false,Callback=function(state)
+	flashTpAlignEnabled = state
+	if state then
+		if not flashTpAlignMiniBtn then
+			flashTpAlignMiniBtn = Hub:CreateMiniActionButton({
+				Flag="FlashTpAlignMini",
+				Label="Align",
+				Callback=function()
+					task.spawn(doFlashAlign)
+				end
+			})
+		end
+		flashTpAlignMiniBtn.gui.Enabled = true
+	else
+		if flashTpAlignMiniBtn then
+			flashTpAlignMiniBtn.gui.Enabled = false
+		end
+	end
+end})
+
+local MovTab=Hub:CreateTab("Movements")
+MovTab:CreateSection("Booster")
+MovTab:CreateSlider({Name="Normal Speed",Flag="NormalSpeed",Min=1,Max=57,CurrentValue=58,Callback=function(v)speedNoSteal=v end})
+MovTab:CreateSlider({Name="Steal Speed",Flag="StealSpeed",Min=1,Max=30,CurrentValue=27,Callback=function(v)speedSteal=v end})
+MovTab:CreateToggle({Name="Booster",Flag="Booster",CurrentValue=false,Callback=function(state)if state then startBooster()else stopBooster()end end})
+MovTab:CreateSection("Player")
+MovTab:CreateToggle({Name="Infinite Jump",Flag="InfJump",CurrentValue=false,Callback=function(state)
+	if state then
+		if infJumpConn then infJumpConn:Disconnect()end
+		infJumpConn=UIS.JumpRequest:Connect(function()
+			local char=lp.Character;local hrp=char and char:FindFirstChild("HumanoidRootPart")
+			if hrp then hrp.AssemblyLinearVelocity=V3(hrp.AssemblyLinearVelocity.X,50,hrp.AssemblyLinearVelocity.Z)end
+		end)
+	else if infJumpConn then infJumpConn:Disconnect();infJumpConn=nil end end
+end})
+
+local VisTab=Hub:CreateTab("Visuals")
+VisTab:CreateSection("ESP")
+VisTab:CreateToggle({Name="Player ESP",Flag="PlayerESP",CurrentValue=false,Callback=function(state)
+	playerESPEnabled=state;if not state then clearPlayerESP()else refreshPlayerESP()end
+end})
+VisTab:CreateToggle({Name="Trace Ur Base",Flag="Tracer",CurrentValue=false,Callback=function(state)
+	tracerEnabled=state;pcall(updateTracer)
+end})
+VisTab:CreateToggle({Name="Best Brainrot",Flag="BrainrotESP",CurrentValue=false,Callback=function(state)
+	brainrotEnabled=state;if not state then clearBrainrotESP()else startBrainrotESP()end
+end})
+VisTab:CreateSection("Performance")
+local antiLagEnabled=false
+local antiLagConns={}
+local function enableAntiLag()
+	if antiLagEnabled then return end
+	antiLagEnabled=true
+	pcall(function()
+		for _,obj in ipairs(workspace:GetDescendants())do
+			if obj:IsA("ParticleEmitter")or obj:IsA("Smoke")or obj:IsA("Fire")or obj:IsA("Sparkles")then
+				obj.Enabled=false
+			elseif obj:IsA("Beam")or obj:IsA("Trail")then
+				obj.Enabled=false
+			elseif obj:IsA("Sound")then
+				obj.Volume=0
+			end
+		end
+	end)
+	table.insert(antiLagConns,workspace.DescendantAdded:Connect(function(obj)
+		if not antiLagEnabled then return end
+		pcall(function()
+			if obj:IsA("ParticleEmitter")or obj:IsA("Smoke")or obj:IsA("Fire")or obj:IsA("Sparkles")then
+				obj.Enabled=false
+			elseif obj:IsA("Beam")or obj:IsA("Trail")then
+				obj.Enabled=false
+			end
+		end)
+	end))
+	pcall(function()
+		settings().Rendering.QualityLevel=Enum.QualityLevel.Level01
+	end)
+	pcall(function()
+		workspace.StreamingEnabled=true
+	end)
+end
+local function disableAntiLag()
+	if not antiLagEnabled then return end
+	antiLagEnabled=false
+	for _,c in ipairs(antiLagConns)do pcall(function()c:Disconnect()end)end
+	antiLagConns={}
+end
+VisTab:CreateToggle({Name="Anti Lag",Flag="AntiLag",CurrentValue=false,Callback=function(state)
+	if state then enableAntiLag()else disableAntiLag()end
+end})
+
+local ProtTab=Hub:CreateTab("Protection")
+ProtTab:CreateSection("Anti Ragdoll")
+ProtTab:CreateToggle({Name="Anti RagDoll",Flag="AntiRagV2",CurrentValue=false,Callback=function(state)
+	if state then startAntiRagV2()else stopAntiRagV2()end
+end})
+ProtTab:CreateSection("Player Safety")
+ProtTab:CreateToggle({Name="Auto Reset On Balloon",Flag="AutoResetBalloon",CurrentValue=false,Callback=function(state)
+	autoResetBalloon=state
+end})
+ProtTab:CreateToggle({Name="Anti Bee Disco",Flag="AntiBeeDisco",CurrentValue=false,Callback=function(state)
+	if state then enableAntiBeeDisco()else disableAntiBeeDisco()end
+end})
+ProtTab:CreateToggle({Name="Kick On Steal",Flag="KickOnSteal",CurrentValue=false,Callback=function(state)
+	kickOnSteal=state
+end})
+
+local ExtraTab=Hub:CreateTab("Extra")
+ExtraTab:CreateSection("Links")
+ExtraTab:CreateButton("Discord",function()
+	setclipboard("https://discord.gg/KacMWYsyAc")
+	Hub:Notify({Title="Copied!",Content="Discord link copied to clipboard.",Duration=3})
+end)
+ExtraTab:CreateSection("Server")
+ExtraTab:CreateButton("Rejoin Server",function()
+	rejoinServer()
+end)
+ExtraTab:CreateButton("Server Hop",function()
+	Hub:Notify({Title="Server Hop",Content="Finding a new server...",Duration=2})
+	serverHop()
+end)
+
+ExtraTab:CreateSection("Config")
+ExtraTab:CreateToggle({Name="Save Config",Flag="SaveConfigToggle",CurrentValue=false,Callback=function(state)
+	Hub.Config.Enabled=state
+	if state then
+		Ascended.Flags["SaveConfigToggle"]=false
+		Hub:Save()
+	end
+end})
+
+local function resetMiniButtonPositions()
+	local MINI_POS_PREFIX="__minipos__"
+	local entries={
+		{isAction=false,flag="AutoGrab"},
+		{isAction=false,flag="Booster"},
+		{isAction=false,flag="InfJump"},
+		{isAction=false,flag="AntiRagV2"},
+	}
+	for _,entry in ipairs(entries)do
+		if entry.isAction then
+			Ascended.Flags[MINI_POS_PREFIX.."act__"..entry.flag]=nil
+		else
+			Ascended.Flags[MINI_POS_PREFIX..entry.flag]=nil
+		end
+	end
+	Ascended.Flags["SaveConfigToggle"]=false
+	Hub.Config.Enabled=true
+	Hub:Save()
+	Hub.Config.Enabled=false
+	Hub:Notify({
+		Title="Positions Reset",
+		Content="Turn Off Save Config, Click ResetMiniBtn, Rejoin.",
+		Duration=5
+	})
+end
+
+ExtraTab:CreateButton("ResetMiniBtn",function()
+	resetMiniButtonPositions()
+end)
